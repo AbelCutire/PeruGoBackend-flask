@@ -1,0 +1,50 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Destino {
+  id           String   @id // ya no tiene @default(autoincrement())
+  slug         String   @unique
+  nombre       String
+  ubicacion    String
+  tipo         String
+  precio       Float
+  duracion     String
+  presupuesto  String
+  imagen       String
+  descripcion  String
+  gastos       Json
+  tours        Json
+  creadoEn     DateTime @default(now())
+  actualizadoEn DateTime @updatedAt
+}
+
+model User {
+  id       String  @id @default(uuid())
+  email    String  @unique
+  username String?
+  password String?
+}
+
+model Profile {
+  id       String  @id @default(uuid())
+  name     String?
+  surname  String?
+  city     String?
+  phone    String?
+}
+
+model Preferences {
+  id        String  @id @default(uuid())
+  budget    Int?
+  travType  String?
+  allergies String?
+  foodRest  String?
+}
