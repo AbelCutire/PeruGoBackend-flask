@@ -1,4 +1,4 @@
-﻿blinker==1.9.0
+blinker==1.9.0
 certifi==2025.10.5
 charset-normalizer==3.4.3
 click==8.3.0
@@ -17,6 +17,6 @@ rdflib==7.4.0
 mysql-connector-python==9.0.0
 groq==0.13.0
 
-
-
-
+google-cloud-speech
+google-cloud-texttospeech
+google-auth
