@@ -7,6 +7,9 @@ import json
 import base64
 import time
 from groq import Groq
+from google.cloud import speech_v1p1beta1 as speech
+from google.cloud import texttospeech_v1 as texttospeech
+from google.oauth2 import service_account
 
 # --------------------------
 # Configuración base
@@ -20,10 +23,31 @@ from generate_rdf import rdf_bp
 app.register_blueprint(rdf_bp)
 
 MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY")
-#MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 
-MINIMAX_BASE = "https://api.minimax.io/v1/text/chatcompletion_v2"
-#MISTRAL_BASE = "https://api.mistral.ai/v1"
+GOOGLE_PROJECT_ID = os.getenv("GOOGLE_PROJECT_ID")
+GOOGLE_CLIENT_EMAIL = os.getenv("GOOGLE_CLIENT_EMAIL")
+GOOGLE_PRIVATE_KEY = os.getenv("GOOGLE_PRIVATE_KEY")
+
+
+def get_google_credentials():
+    """Construye credenciales de servicio de Google a partir de variables de entorno."""
+    if not (GOOGLE_PROJECT_ID and GOOGLE_CLIENT_EMAIL and GOOGLE_PRIVATE_KEY):
+        print("⚠️ Faltan variables de entorno de Google Cloud (GOOGLE_PROJECT_ID / GOOGLE_CLIENT_EMAIL / GOOGLE_PRIVATE_KEY)")
+        return None
+
+    try:
+        info = {
+            "type": "service_account",
+            "project_id": GOOGLE_PROJECT_ID,
+            "client_email": GOOGLE_CLIENT_EMAIL,
+            # Las keys suelen venir con \n escapados en env vars
+            "private_key": GOOGLE_PRIVATE_KEY.replace("\\n", "\n"),
+            "token_uri": "https://oauth2.googleapis.com/token",
+        }
+        return service_account.Credentials.from_service_account_info(info)
+    except Exception as e:
+        print("Error construyendo credenciales de Google:", e)
+        return None
 
 # --------------------------
 # Home simple
@@ -78,20 +102,38 @@ def speech_to_speech():
 
 
 # --------------------------
-# Función: MiniMax STT
+# Función: STT con Google Cloud
 # --------------------------
 def call_minimax_stt(audio_file):
-    url = f"{MINIMAX_BASE}/speech:transcribe"
-    headers = {"Authorization": f"Bearer {MINIMAX_API_KEY}"}
-    files = {"file": (audio_file.filename, audio_file, audio_file.mimetype)}
+    """Compatibilidad de nombre: ahora usa Google Speech-to-Text.
+
+    - Recibe el archivo de audio (WAV/MP3) desde Flask.
+    - Llama a Google Speech-to-Text.
+    - Devuelve el texto transcrito o None en caso de error.
+    """
+    creds = get_google_credentials()
+    if creds is None:
+        return None
+
+    client = speech.SpeechClient(credentials=creds)
 
     try:
-        r = requests.post(url, headers=headers, files=files)
-        r.raise_for_status()
-        result = r.json()
-        return result.get("text", "")
+        audio_bytes = audio_file.read()
+        audio = speech.RecognitionAudio(content=audio_bytes)
+
+        # Usamos ENCODING_UNSPECIFIED para que Google intente detectar el formato.
+        config = speech.RecognitionConfig(
+            language_code="es-PE",  # Ajusta si prefieres "es-ES" u otro dialecto.
+            encoding=speech.RecognitionConfig.AudioEncoding.ENCODING_UNSPECIFIED,
+        )
+
+        response = client.recognize(config=config, audio=audio)
+        if not response.results:
+            return ""
+
+        return response.results[0].alternatives[0].transcript
     except Exception as e:
-        print("Error en STT:", e)
+        print("Error en Google STT:", e)
         return None
 
 
@@ -130,76 +172,40 @@ def call_groq_llm(user_text):
         return "Error procesando solicitud con Groq."
 
 # --------------------------
-# Función: MiniMax TTS
+# Función: TTS con Google Cloud
 # --------------------------
 def call_minimax_tts(text):
-    api_key = MINIMAX_API_KEY
-    if not api_key:
-        print("⚠️ No se encontró MINIMAX_API_KEY en .env")
+    """Compatibilidad de nombre: ahora usa Google Text-to-Speech.
+
+    - Recibe texto en español.
+    - Llama a Google TTS y devuelve bytes MP3.
+    """
+    creds = get_google_credentials()
+    if creds is None:
         return None
 
-    create_url = "https://api.minimax.io/v1/t2a_async_v2"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": "speech-2.6-hd",
-        "text": text,
-        "language_boost": "auto",
-        "voice_setting": {
-            "voice_id": "English_expressive_narrator",
-            "speed": 1,
-            "vol": 10,
-            "pitch": 1
-        },
-        "audio_setting": {
-            "audio_sample_rate": 32000,
-            "bitrate": 128000,
-            "format": "mp3",
-            "channel": 2
-        }
-    }
+    client = texttospeech.TextToSpeechClient(credentials=creds)
+
+    synthesis_input = texttospeech.SynthesisInput(text=text)
+
+    voice_params = texttospeech.VoiceSelectionParams(
+        language_code="es-PE",  # Cambia a "es-ES" u otro si lo prefieres.
+        ssml_gender=texttospeech.SsmlVoiceGender.NEUTRAL,
+    )
+
+    audio_config = texttospeech.AudioConfig(
+        audio_encoding=texttospeech.AudioEncoding.MP3,
+    )
 
     try:
-        r = requests.post(create_url, headers=headers, json=payload)
-        r.raise_for_status()
-        result = r.json()
-        task_id = result.get("task_id")
-        if not task_id:
-            print("⚠️ No se recibió task_id de MiniMax.")
-            return None
-
-        status_url = f"https://api.minimax.io/v1/query/t2a_async_query_v2?task_id={task_id}"
-
-        for _ in range(10):
-            time.sleep(1)
-            s = requests.get(status_url, headers=headers)
-            s.raise_for_status()
-            status_data = s.json()
-
-            if status_data.get("status") == "Success":
-                file_id = status_data.get("file_id")
-                if not file_id:
-                    print("⚠️ No se obtuvo file_id del resultado.")
-                    return None
-
-                file_url = f"https://api.minimax.io/v1/files/retrieve_content?file_id={file_id}"
-                audio_res = requests.get(file_url, headers=headers)
-                audio_res.raise_for_status()
-                return audio_res.content
-
-            elif status_data.get("status") in ["Running", "Pending"]:
-                continue
-            else:
-                print("⚠️ Estado inesperado:", status_data)
-                return None
-
-        print("⏰ Timeout: la tarea de TTS tardó demasiado.")
-        return None
-
+        response = client.synthesize_speech(
+            input=synthesis_input,
+            voice=voice_params,
+            audio_config=audio_config,
+        )
+        return response.audio_content
     except Exception as e:
-        print("Error en TTS:", e)
+        print("Error en Google TTS:", e)
         return None
 
 
