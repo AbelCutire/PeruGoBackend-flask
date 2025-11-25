@@ -58,17 +58,38 @@ def home():
 
 
 # --------------------------
-# 1️⃣ Ruta STS: recibe audio → LLM → audio respuesta
+# 1️⃣ Ruta STT pura: solo transcripción con Google
+# --------------------------
+@app.route('/stt', methods=['POST'])
+def speech_to_text_only():
+    """Recibe audio y devuelve solo el texto transcrito usando Google STT."""
+    if 'audio' not in request.files:
+        return jsonify({"error": "No se envió archivo de audio"}), 400
+
+    audio_file = request.files['audio']
+    stt_text = call_minimax_stt(audio_file)
+
+    # None = error duro, "" = transcripción vacía pero válida
+    if stt_text is None:
+        return jsonify({"error": "Fallo en transcripción"}), 500
+
+    return jsonify({
+        "stt_text": stt_text
+    })
+
+
+# --------------------------
+# 2️⃣ Ruta STS: recibe audio → LLM → audio respuesta
 # --------------------------
 @app.route('/sts', methods=['POST'])
 def speech_to_speech():
     """
     Flujo completo STS:
     - Recibe archivo de audio (.wav o .mp3)
-    - Llama a MiniMax STT para convertirlo en texto
-    - Procesa el texto con Mistral (LLM francés)
-    - Llama a MiniMax TTS para convertir respuesta a audio
-    - Devuelve texto + audio (base64 o URL)
+    - Convierte a texto con Google STT
+    - Procesa el texto con Groq (LLM)
+    - Convierte la respuesta a audio con Google TTS
+    - Devuelve texto + audio (base64)
     """
     if 'audio' not in request.files:
         return jsonify({"error": "No se envió archivo de audio"}), 400
@@ -77,16 +98,12 @@ def speech_to_speech():
 
     # 1️⃣ STT
     stt_text = call_minimax_stt(audio_file)
-    if not stt_text:
+    if stt_text is None:
         return jsonify({"error": "Fallo en transcripción"}), 500
 
     # 2️⃣ LLM
-    llm_output = call_groq_llm(stt_text)
-    if isinstance(llm_output, dict):
-        llm_text = llm_output.get("reply", str(llm_output))
-    else:
-        llm_text = str(llm_output)
-    action = llm_output.get("action", "none")
+    llm_text = call_groq_llm(stt_text)
+    action = "none"  # Reservado por si luego quieres devolver acciones estructuradas
 
     # 3️⃣ TTS
     tts_audio = call_minimax_tts(llm_text)
