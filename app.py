@@ -7,7 +7,8 @@ import json
 import base64
 import time
 from groq import Groq
-from google.cloud import texttospeech_v1 as texttospeech
+from google.cloud import speech_v1 as speech
+from google.oauth2 import service_account
 
 # --------------------------
 # Configuración base
@@ -22,8 +23,10 @@ app.register_blueprint(rdf_bp)
 
 MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY")
 
-# API key para Google Speech-to-Text (REST)
-SPEECH_API_KEY = os.getenv("SPEECH_API_KEY")
+# Credenciales para Google Speech-to-Text (service account)
+GOOGLE_STT_PROJECT_ID = os.getenv("GOOGLE_STT_PROJECT_ID")
+GOOGLE_STT_CLIENT_EMAIL = os.getenv("GOOGLE_STT_CLIENT_EMAIL")
+GOOGLE_STT_PRIVATE_KEY = os.getenv("GOOGLE_STT_PRIVATE_KEY")
 
 # --------------------------
 # Home simple
@@ -64,8 +67,7 @@ def speech_to_speech():
     - Recibe archivo de audio (.wav o .mp3)
     - Convierte a texto con Google STT
     - Procesa el texto con Groq (LLM)
-    - Convierte la respuesta a audio con Google TTS
-    - Devuelve texto + audio (base64)
+    - Devuelve texto de entrada + respuesta del LLM.
     """
     if 'audio' not in request.files:
         return jsonify({"error": "No se envió archivo de audio"}), 400
@@ -81,62 +83,58 @@ def speech_to_speech():
     llm_text = call_groq_llm(stt_text)
     action = "none"  # Reservado por si luego quieres devolver acciones estructuradas
 
-    # 3️⃣ TTS
-    tts_audio = call_minimax_tts(llm_text)
-    audio_base64 = base64.b64encode(tts_audio).decode('utf-8') if tts_audio else None
-
-    # 4️⃣ Respuesta
+    # 3️⃣ Respuesta (solo texto, sin TTS)
     return jsonify({
         "stt_text": stt_text,
         "llm_response": llm_text,
-        "action": action,
-        "audio_base64": audio_base64
+        "action": action
     })
 
 
 # --------------------------
-# Función: STT con Google Cloud
+# Función: STT con Google Cloud (service account)
 # --------------------------
 def call_minimax_stt(audio_file):
-    """Compatibilidad de nombre: ahora usa Google Speech-to-Text REST con API key.
+    """Compatibilidad de nombre: ahora usa Google Speech-to-Text con cuenta de servicio.
 
     - Recibe el archivo de audio (WAV/MP3) desde Flask.
-    - Llama a la API REST de Google Speech-to-Text con SPEECH_API_KEY.
+    - Usa las variables GOOGLE_STT_PROJECT_ID, GOOGLE_STT_CLIENT_EMAIL y
+      GOOGLE_STT_PRIVATE_KEY para autenticarse.
     - Devuelve el texto transcrito o None en caso de error.
     """
-    if not SPEECH_API_KEY:
-        print("⚠️ Falta SPEECH_API_KEY en variables de entorno")
+
+    if not (GOOGLE_STT_PROJECT_ID and GOOGLE_STT_CLIENT_EMAIL and GOOGLE_STT_PRIVATE_KEY):
+        print("⚠️ Faltan variables de entorno de Google Cloud para STT")
         return None
 
     try:
         audio_bytes = audio_file.read()
-        audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
 
-        url = f"https://speech.googleapis.com/v1/speech:recognize?key={SPEECH_API_KEY}"
-
-        payload = {
-            "config": {
-                "languageCode": "es-PE",  # Ajusta dialecto si lo prefieres
-                "encoding": "ENCODING_UNSPECIFIED",  # Que Google detecte
-            },
-            "audio": {
-                "content": audio_base64,
-            },
+        # Construimos las credenciales desde las variables de entorno.
+        info = {
+            "type": "service_account",
+            "project_id": GOOGLE_STT_PROJECT_ID,
+            "client_email": GOOGLE_STT_CLIENT_EMAIL,
+            "private_key": GOOGLE_STT_PRIVATE_KEY.replace("\\n", "\n"),
+            "token_uri": "https://oauth2.googleapis.com/token",
         }
+        creds = service_account.Credentials.from_service_account_info(info)
 
-        resp = requests.post(url, json=payload)
-        if resp.status_code != 200:
-            print("Error STT HTTP", resp.status_code, resp.text[:500])
-            return None
+        client = speech.SpeechClient(credentials=creds)
 
-        data = resp.json()
-        results = data.get("results", [])
-        if not results:
+        audio = speech.RecognitionAudio(content=audio_bytes)
+        config = speech.RecognitionConfig(
+            language_code="es-PE",
+            enable_automatic_punctuation=True,
+        )
+
+        response = client.recognize(config=config, audio=audio)
+        if not response.results:
             return ""
 
-        return results[0].get("alternatives", [{}])[0].get("transcript", "")
+        return response.results[0].alternatives[0].transcript
     except Exception as e:
-        print("Error en Google STT (REST):", e)
+        print("Error en Google STT (service account):", e)
         return None
 
 
@@ -174,63 +172,7 @@ def call_groq_llm(user_text):
         print("Error en Groq:", e)
         return "Error procesando solicitud con Groq."
 
-# --------------------------
-# Función: TTS con Google Cloud
-# --------------------------
-def call_minimax_tts(text):
-    """Compatibilidad de nombre: ahora usa Google Text-to-Speech.
-
-    - Recibe texto en español.
-    - Llama a Google TTS y devuelve bytes MP3.
-    """
-    # Para TTS seguimos usando credenciales de servicio si las tienes
-    # Si no, puedes adaptar también esto a API key en el futuro.
-    from google.oauth2 import service_account
-
-    GOOGLE_PROJECT_ID = os.getenv("GOOGLE_PROJECT_ID")
-    GOOGLE_CLIENT_EMAIL = os.getenv("GOOGLE_CLIENT_EMAIL")
-    GOOGLE_PRIVATE_KEY = os.getenv("GOOGLE_PRIVATE_KEY")
-
-    if not (GOOGLE_PROJECT_ID and GOOGLE_CLIENT_EMAIL and GOOGLE_PRIVATE_KEY):
-        print("⚠️ Faltan variables de entorno de Google Cloud para TTS")
-        return None
-
-    try:
-        info = {
-            "type": "service_account",
-            "project_id": GOOGLE_PROJECT_ID,
-            "client_email": GOOGLE_CLIENT_EMAIL,
-            "private_key": GOOGLE_PRIVATE_KEY.replace("\\n", "\n"),
-            "token_uri": "https://oauth2.googleapis.com/token",
-        }
-        creds = service_account.Credentials.from_service_account_info(info)
-    except Exception as e:
-        print("Error construyendo credenciales de Google para TTS:", e)
-        return None
-
-    client = texttospeech.TextToSpeechClient(credentials=creds)
-
-    synthesis_input = texttospeech.SynthesisInput(text=text)
-
-    voice_params = texttospeech.VoiceSelectionParams(
-        language_code="es-PE",  # Cambia a "es-ES" u otro si lo prefieres.
-        ssml_gender=texttospeech.SsmlVoiceGender.NEUTRAL,
-    )
-
-    audio_config = texttospeech.AudioConfig(
-        audio_encoding=texttospeech.AudioEncoding.MP3,
-    )
-
-    try:
-        response = client.synthesize_speech(
-            input=synthesis_input,
-            voice=voice_params,
-            audio_config=audio_config,
-        )
-        return response.audio_content
-    except Exception as e:
-        print("Error en Google TTS:", e)
-        return None
+    
 
 
 # --------------------------
@@ -246,13 +188,9 @@ def process_text():
 
     llm_text = call_groq_llm(user_text)
 
-    # (Opcional) convertir respuesta a audio
-    tts_audio = call_minimax_tts(llm_text)
-    audio_base64 = base64.b64encode(tts_audio).decode("utf-8") if tts_audio else None
-
+    # Devolvemos solo el texto generado por el LLM (sin TTS)
     return jsonify({
-        "text_response": llm_text,
-        "audio_base64": audio_base64
+        "text_response": llm_text
     })
 
 # --------------------------
