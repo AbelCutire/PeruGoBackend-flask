@@ -95,7 +95,6 @@ def call_minimax_stt(audio_file):
     
     Corregido para soportar múltiples formatos de audio desde React Native.
     """
-    
     if not SPEECH_API_KEY:
         print("⚠️ Falta SPEECH_API_KEY en variables de entorno")
         return None
@@ -103,30 +102,34 @@ def call_minimax_stt(audio_file):
     try:
         # Leer contenido del archivo
         audio_bytes = audio_file.read()
+
+        # --- DIAGNÓSTICO ---
+        print("MIME recibido:", audio_file.mimetype)
+        print("Nombre recibido:", audio_file.filename)
+        print("Primeros 32 bytes:", audio_bytes[:32])
+
+        with open("debug_last_audio.raw", "wb") as f:
+            f.write(audio_bytes)
+        # ---------------------
+
         audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
-        
-        # Obtener el nombre del archivo para detectar formato
-        filename = audio_file.filename.lower() if audio_file.filename else ""
-        
-        # Determinar encoding basado en extensión
-        encoding = "LINEAR16"  # Default para WAV
-        sample_rate = None    # Default común
-        
+
+        # Detección real de formato vía magic numbers
         header = audio_bytes[:12]
+        encoding = "MP3"
 
         if header.startswith(b'RIFF') and b'WAVE' in header:
             encoding = "LINEAR16"
-        elif header[4:8] == b'ftyp':  # MP4/M4A container
-            encoding = "MP3"          # Google procesa m4a mucho mejor como MP3
+        elif header[4:8] == b'ftyp':
+            encoding = "MP3"
         elif header.startswith(b'\xff\xfb') or header.startswith(b'ID3'):
             encoding = "MP3"
-        elif header.startswith(b'\x1A\x45\xDF\xA3'):  # WebM
+        elif header.startswith(b'\x1A\x45\xDF\xA3'):
             encoding = "WEBM_OPUS"
-        else:
-            encoding = "MP3"
 
-        
-        print(f"🎤 Procesando audio: {filename or 'sin-nombre'}")
+        filename = audio_file.filename.lower() if audio_file.filename else "sin-nombre"
+
+        print(f"🎤 Procesando audio: {filename}")
         print(f"📊 Encoding detectado: {encoding}")
         print(f"📏 Tamaño: {len(audio_bytes)} bytes")
 
@@ -144,43 +147,30 @@ def call_minimax_stt(audio_file):
         }
 
         resp = requests.post(url, json=payload, timeout=30)
-        
+
         if resp.status_code != 200:
             print(f"❌ Error STT HTTP {resp.status_code}")
             print(f"📄 Response: {resp.text[:500]}")
-            
-            # Si falla, intentar sin especificar sample rate
-            if "sampleRateHertz" in payload["config"]:
-                print("🔄 Reintentando sin sampleRateHertz...")
-                del payload["config"]["sampleRateHertz"]
-                resp = requests.post(url, json=payload, timeout=30)
-                
-                if resp.status_code != 200:
-                    print(f"❌ Error en reintento: {resp.status_code} - {resp.text[:300]}")
-                    return None
+            return None
 
         data = resp.json()
         results = data.get("results", [])
-        
+
         if not results:
             print("⚠️ Sin resultados de transcripción (audio vacío o inaudible)")
             return ""
 
-        transcript = results[0].get("alternatives", [{}])[0].get("transcript", "")
-        confidence = results[0].get("alternatives", [{}])[0].get("confidence", 0)
-        
-        print(f"✅ Transcrito: '{transcript}' (confianza: {confidence:.2f})")
+        transcript = results[0]["alternatives"][0].get("transcript", "")
+        conf = results[0]["alternatives"][0].get("confidence", 0)
+
+        print(f"✅ Transcrito: '{transcript}' (confianza: {conf:.2f})")
         return transcript
-        
-    except requests.exceptions.Timeout:
-        print("⏱️ Timeout en Google STT - el audio puede ser muy largo")
-        return None
+
     except Exception as e:
         print(f"❌ Error en Google STT: {type(e).__name__}: {e}")
         import traceback
         traceback.print_exc()
         return None
-
 
 # --------------------------
 # Función: LLM (Mistral)
