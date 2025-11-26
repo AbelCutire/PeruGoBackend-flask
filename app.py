@@ -111,7 +111,7 @@ def call_minimax_stt(audio_file):
         payload = {
             "config": {
                 "languageCode": "es-PE",
-                "encoding": "ENCODING_UNSPECIFIED",  # Que Google detecte
+                # No especificamos encoding para que Google lo detecte automáticamente.
                 "enableAutomaticPunctuation": True,
             },
             "audio": {
