@@ -7,8 +7,6 @@ import json
 import base64
 import time
 from groq import Groq
-from google.cloud import speech_v1 as speech
-from google.oauth2 import service_account
 
 # --------------------------
 # Configuración base
@@ -23,10 +21,8 @@ app.register_blueprint(rdf_bp)
 
 MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY")
 
-# Credenciales para Google Speech-to-Text (service account)
-GOOGLE_STT_PROJECT_ID = os.getenv("GOOGLE_STT_PROJECT_ID")
-GOOGLE_STT_CLIENT_EMAIL = os.getenv("GOOGLE_STT_CLIENT_EMAIL")
-GOOGLE_STT_PRIVATE_KEY = os.getenv("GOOGLE_STT_PRIVATE_KEY")
+# API key para Google Speech-to-Text (REST)
+SPEECH_API_KEY = os.getenv("SPEECH_API_KEY")
 
 # --------------------------
 # Home simple
@@ -92,50 +88,50 @@ def speech_to_speech():
 
 
 # --------------------------
-# Función: STT con Google Cloud (service account)
+# Función: STT con Google Cloud (API REST + SPEECH_API_KEY)
 # --------------------------
 def call_minimax_stt(audio_file):
-    """Compatibilidad de nombre: ahora usa Google Speech-to-Text con cuenta de servicio.
+    """Compatibilidad de nombre: usa Google Speech-to-Text REST con API key.
 
-    - Recibe el archivo de audio (WAV/MP3) desde Flask.
-    - Usa las variables GOOGLE_STT_PROJECT_ID, GOOGLE_STT_CLIENT_EMAIL y
-      GOOGLE_STT_PRIVATE_KEY para autenticarse.
+    - Recibe el archivo de audio (WAV/MP3/M4A) desde Flask.
+    - Llama a la API REST de Google Speech-to-Text con SPEECH_API_KEY.
     - Devuelve el texto transcrito o None en caso de error.
     """
 
-    if not (GOOGLE_STT_PROJECT_ID and GOOGLE_STT_CLIENT_EMAIL and GOOGLE_STT_PRIVATE_KEY):
-        print("⚠️ Faltan variables de entorno de Google Cloud para STT")
+    if not SPEECH_API_KEY:
+        print("⚠️ Falta SPEECH_API_KEY en variables de entorno")
         return None
 
     try:
         audio_bytes = audio_file.read()
+        audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
 
-        # Construimos las credenciales desde las variables de entorno.
-        info = {
-            "type": "service_account",
-            "project_id": GOOGLE_STT_PROJECT_ID,
-            "client_email": GOOGLE_STT_CLIENT_EMAIL,
-            "private_key": GOOGLE_STT_PRIVATE_KEY.replace("\\n", "\n"),
-            "token_uri": "https://oauth2.googleapis.com/token",
+        url = f"https://speech.googleapis.com/v1/speech:recognize?key={SPEECH_API_KEY}"
+
+        payload = {
+            "config": {
+                "languageCode": "es-PE",
+                "encoding": "ENCODING_UNSPECIFIED",  # Que Google detecte
+                "enableAutomaticPunctuation": True,
+            },
+            "audio": {
+                "content": audio_base64,
+            },
         }
-        creds = service_account.Credentials.from_service_account_info(info)
 
-        client = speech.SpeechClient(credentials=creds)
+        resp = requests.post(url, json=payload)
+        if resp.status_code != 200:
+            print("Error STT HTTP", resp.status_code, resp.text[:500])
+            return None
 
-        audio = speech.RecognitionAudio(content=audio_bytes)
-        # No especificamos encoding para que Google lo detecte automáticamente.
-        config = speech.RecognitionConfig(
-            language_code="es-PE",
-            enable_automatic_punctuation=True,
-        )
-
-        response = client.recognize(config=config, audio=audio)
-        if not response.results:
+        data = resp.json()
+        results = data.get("results", [])
+        if not results:
             return ""
 
-        return response.results[0].alternatives[0].transcript
+        return results[0].get("alternatives", [{}])[0].get("transcript", "")
     except Exception as e:
-        print("Error en Google STT (service account):", e)
+        print("Error en Google STT (REST):", e)
         return None
 
 
