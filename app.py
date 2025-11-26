@@ -136,8 +136,8 @@ def call_minimax_stt(audio_file):
             "config": {
                 "encoding": encoding,
                 "languageCode": "es-PE",
-                "enableAutomaticPunctuation": True
-            }
+                "enableAutomaticPunctuation": True,
+            },
             "audio": {
                 "content": audio_base64,
             },
