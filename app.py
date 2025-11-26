@@ -110,25 +110,21 @@ def call_minimax_stt(audio_file):
         
         # Determinar encoding basado en extensión
         encoding = "LINEAR16"  # Default para WAV
-        sample_rate = 44100    # Default común
+        sample_rate = None    # Default común
         
-        if filename.endswith('.mp3'):
-            encoding = "MP3"
-        elif filename.endswith('.m4a') or filename.endswith('.aac'):
-            encoding = "AMR_WB"  # O usar MP3 como fallback
-        elif filename.endswith('.wav'):
+        header = audio_bytes[:12]
+
+        if header.startswith(b'RIFF') and b'WAVE' in header:
             encoding = "LINEAR16"
-        elif filename.endswith('.webm'):
+        elif header[4:8] == b'ftyp':  # MP4/M4A container
+            encoding = "MP3"          # Google procesa m4a mucho mejor como MP3
+        elif header.startswith(b'\xff\xfb') or header.startswith(b'ID3'):
+            encoding = "MP3"
+        elif header.startswith(b'\x1A\x45\xDF\xA3'):  # WebM
             encoding = "WEBM_OPUS"
         else:
-            # Intentar detectar por los primeros bytes (magic numbers)
-            if audio_bytes.startswith(b'RIFF'):
-                encoding = "LINEAR16"  # WAV
-            elif audio_bytes.startswith(b'\xff\xfb') or audio_bytes.startswith(b'ID3'):
-                encoding = "MP3"
-            else:
-                # Fallback: intentar LINEAR16
-                encoding = "LINEAR16"
+            encoding = "MP3"
+
         
         print(f"🎤 Procesando audio: {filename or 'sin-nombre'}")
         print(f"📊 Encoding detectado: {encoding}")
@@ -139,11 +135,9 @@ def call_minimax_stt(audio_file):
         payload = {
             "config": {
                 "encoding": encoding,
-                "sampleRateHertz": sample_rate,
                 "languageCode": "es-PE",
-                "enableAutomaticPunctuation": True,
-                "model": "default",  # o "command_and_search" para mejor reconocimiento
-            },
+                "enableAutomaticPunctuation": True
+            }
             "audio": {
                 "content": audio_base64,
             },
