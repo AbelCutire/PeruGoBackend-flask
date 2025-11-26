@@ -126,6 +126,7 @@ def call_minimax_stt(audio_file):
         config = speech.RecognitionConfig(
             language_code="es-PE",
             enable_automatic_punctuation=True,
+            encoding=speech.RecognitionConfig.AudioEncoding.ENCODING_UNSPECIFIED,
         )
 
         response = client.recognize(config=config, audio=audio)
