@@ -3,187 +3,105 @@ from flask_cors import CORS
 import os
 from dotenv import load_dotenv
 import requests
-import json
 import base64
-import time
 from groq import Groq
 
-# --------------------------
-# Configuración base
-# --------------------------
 load_dotenv()
 app = Flask(__name__)
 CORS(app)
 
-# ✅ Importamos el blueprint RDF
-from generate_rdf import rdf_bp
-app.register_blueprint(rdf_bp)
+# Blueprint si lo usas
+try:
+    from generate_rdf import rdf_bp
+    app.register_blueprint(rdf_bp)
+except:
+    pass
 
-MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY")
-
-# API key para Google Speech-to-Text (REST)
 SPEECH_API_KEY = os.getenv("SPEECH_API_KEY")
 
-# --------------------------
-# Home simple
-# --------------------------
-@app.route('/')
+@app.route("/")
 def home():
     return jsonify({"message": "Servidor backend operativo."})
 
 
-# --------------------------
-# 1️⃣ Ruta STT pura: solo transcripción con Google
-# --------------------------
-@app.route('/stt', methods=['POST'])
-def speech_to_text_only():
-    """Recibe audio y devuelve solo el texto transcrito usando Google STT."""
-    if 'audio' not in request.files:
-        return jsonify({"error": "No se envió archivo de audio"}), 400
+# =========================================================
+# FUNCIÓN STT POR BYTES BASE64 (SEGURA Y ROBUSTA)
+# =========================================================
+def google_stt_raw_bytes(audio_bytes: bytes):
+    header = audio_bytes[:12]
 
-    audio_file = request.files['audio']
-    stt_text = call_minimax_stt(audio_file)
-
-    # None = error duro, "" = transcripción vacía pero válida
-    if stt_text is None:
-        return jsonify({"error": "Fallo en transcripción"}), 500
-
-    return jsonify({
-        "stt_text": stt_text
-    })
-
-
-# --------------------------
-# 2️⃣ Ruta STS: recibe audio → LLM → audio respuesta
-# --------------------------
-@app.route('/sts', methods=['POST'])
-def speech_to_speech():
-    """
-    Flujo completo STS:
-    - Recibe archivo de audio (.wav o .mp3)
-    - Convierte a texto con Google STT
-    - Procesa el texto con Groq (LLM)
-    - Devuelve texto de entrada + respuesta del LLM.
-    """
-    if 'audio' not in request.files:
-        return jsonify({"error": "No se envió archivo de audio"}), 400
-
-    audio_file = request.files['audio']
-
-    # 1️⃣ STT
-    stt_text = call_minimax_stt(audio_file)
-    if stt_text is None:
-        return jsonify({"error": "Fallo en transcripción"}), 500
-
-    # 2️⃣ LLM
-    llm_text = call_groq_llm(stt_text)
-    action = "none"  # Reservado por si luego quieres devolver acciones estructuradas
-
-    # 3️⃣ Respuesta (solo texto, sin TTS)
-    return jsonify({
-        "stt_text": stt_text,
-        "llm_response": llm_text,
-        "action": action
-    })
-
-
-# --------------------------
-# Función: STT con Google Cloud (API REST + SPEECH_API_KEY)
-# --------------------------
-def call_minimax_stt(audio_file):
-    """Transcribe audio usando Google Speech-to-Text REST API.
-    
-    Corregido para soportar múltiples formatos de audio desde React Native.
-    """
-    if not SPEECH_API_KEY:
-        print("⚠️ Falta SPEECH_API_KEY en variables de entorno")
-        return None
-
-    try:
-        # Leer contenido del archivo
-        audio_bytes = audio_file.read()
-
-        # --- DIAGNÓSTICO ---
-        print("MIME recibido:", audio_file.mimetype)
-        print("Nombre recibido:", audio_file.filename)
-        print("Primeros 32 bytes:", audio_bytes[:32])
-
-        with open("debug_last_audio.raw", "wb") as f:
-            f.write(audio_bytes)
-        # ---------------------
-
-        audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
-
-        # Detección real de formato vía magic numbers
-        header = audio_bytes[:12]
+    if header.startswith(b'RIFF') and b'WAVE' in header:
+        encoding = "LINEAR16"
+    elif header[4:8] == b'ftyp':
+        encoding = "MP3"
+    elif header.startswith(b'\xff\xfb') or header.startswith(b'ID3'):
+        encoding = "MP3"
+    elif header.startswith(b'\x1A\x45\xDF\xA3'):
+        encoding = "WEBM_OPUS"
+    else:
         encoding = "MP3"
 
-        if header.startswith(b'RIFF') and b'WAVE' in header:
-            encoding = "LINEAR16"
-        elif header[4:8] == b'ftyp':
-            encoding = "MP3"
-        elif header.startswith(b'\xff\xfb') or header.startswith(b'ID3'):
-            encoding = "MP3"
-        elif header.startswith(b'\x1A\x45\xDF\xA3'):
-            encoding = "WEBM_OPUS"
+    print("📊 Encoding detectado:", encoding)
+    print("📏 Tamaño recibido:", len(audio_bytes))
 
-        filename = audio_file.filename.lower() if audio_file.filename else "sin-nombre"
+    audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
 
-        print(f"🎤 Procesando audio: {filename}")
-        print(f"📊 Encoding detectado: {encoding}")
-        print(f"📏 Tamaño: {len(audio_bytes)} bytes")
-
-        url = f"https://speech.googleapis.com/v1/speech:recognize?key={SPEECH_API_KEY}"
-
-        payload = {
-            "config": {
-                "encoding": encoding,
-                "languageCode": "es-PE",
-                "enableAutomaticPunctuation": True,
-            },
-            "audio": {
-                "content": audio_base64,
-            },
+    payload = {
+        "config": {
+            "encoding": encoding,
+            "languageCode": "es-PE",
+            "enableAutomaticPunctuation": True,
+        },
+        "audio": {
+            "content": audio_b64
         }
+    }
 
-        resp = requests.post(url, json=payload, timeout=30)
+    url = f"https://speech.googleapis.com/v1/speech:recognize?key={SPEECH_API_KEY}"
 
-        if resp.status_code != 200:
-            print(f"❌ Error STT HTTP {resp.status_code}")
-            print(f"📄 Response: {resp.text[:500]}")
-            return None
+    resp = requests.post(url, json=payload, timeout=30)
 
-        data = resp.json()
-        results = data.get("results", [])
-
-        if not results:
-            print("⚠️ Sin resultados de transcripción (audio vacío o inaudible)")
-            return ""
-
-        transcript = results[0]["alternatives"][0].get("transcript", "")
-        conf = results[0]["alternatives"][0].get("confidence", 0)
-
-        print(f"✅ Transcrito: '{transcript}' (confianza: {conf:.2f})")
-        return transcript
-
-    except Exception as e:
-        print(f"❌ Error en Google STT: {type(e).__name__}: {e}")
-        import traceback
-        traceback.print_exc()
+    if resp.status_code != 200:
+        print("❌ Error STT:", resp.text[:500])
         return None
 
-# --------------------------
-# Función: LLM (Mistral)
-# --------------------------
-def call_groq_llm(user_text):
-    """
-    Envía el texto del usuario a Groq (modelo LLaMA 3.3) y devuelve
-    solo una respuesta breve en español, sin formato JSON.
-    """
-    try:
-        from groq import Groq
-        client = Groq()
+    data = resp.json()
+    results = data.get("results", [])
 
+    if not results:
+        print("⚠️ STT vacío")
+        return ""
+
+    transcript = results[0]["alternatives"][0]["transcript"]
+    print("✅ Texto:", transcript)
+    return transcript
+
+
+# =========================================================
+# RUTA STT BASE64
+# =========================================================
+@app.route("/stt_base64", methods=["POST"])
+def stt_base64():
+    data = request.get_json()
+
+    if not data or "audio_base64" not in data:
+        return jsonify({"error": "audio_base64 no proporcionado"}), 400
+
+    audio_bytes = base64.b64decode(data["audio_base64"])
+    text = google_stt_raw_bytes(audio_bytes)
+
+    if text is None:
+        return jsonify({"error": "Error en STT"}), 500
+
+    return jsonify({"stt_text": text})
+
+
+# =========================================================
+# RUTA STS (AUDIO → TEXTO → LLM)
+# =========================================================
+def call_groq_llm(user_text):
+    try:
+        client = Groq()
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
@@ -191,46 +109,42 @@ def call_groq_llm(user_text):
                     "role": "system",
                     "content": (
                         "Eres un asistente turístico de PerúGo. "
-                        "Responde siempre en español de forma breve, amable y natural. "
-                        "No uses JSON ni estructuras, solo texto plano."
+                        "Responde siempre en español en texto plano."
                     )
                 },
                 {"role": "user", "content": user_text}
             ],
             temperature=0.5
         )
-
         return completion.choices[0].message.content.strip()
 
     except Exception as e:
-        print("Error en Groq:", e)
-        return "Error procesando solicitud con Groq."
-
-    
+        print("Error Groq:", e)
+        return "Error con LLM"
 
 
-# --------------------------
-# 2️⃣ Ruta: /process - texto plano → LLM → TTS
-# --------------------------
-@app.route('/process', methods=['POST'])
-def process_text():
+@app.route("/sts", methods=["POST"])
+def sts():
     data = request.get_json()
-    user_text = data.get("text", "").strip()
 
-    if not user_text:
-        return jsonify({"error": "No se recibió texto"}), 400
+    if not data or "audio_base64" not in data:
+        return jsonify({"error": "audio_base64 requerido"}), 400
 
-    llm_text = call_groq_llm(user_text)
+    audio_bytes = base64.b64decode(data["audio_base64"])
+    stt_text = google_stt_raw_bytes(audio_bytes)
 
-    # Devolvemos solo el texto generado por el LLM (sin TTS)
+    if stt_text is None:
+        return jsonify({"error": "Fallo en STT"}), 500
+
+    llm_text = call_groq_llm(stt_text)
+
     return jsonify({
-        "text_response": llm_text
+        "stt_text": stt_text,
+        "llm_response": llm_text,
+        "action": "none"
     })
 
-# --------------------------
-# Ejecutar servidor
-# --------------------------
-if __name__ == '__main__':
-    load_dotenv()
+
+if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
