@@ -91,47 +91,100 @@ def speech_to_speech():
 # Función: STT con Google Cloud (API REST + SPEECH_API_KEY)
 # --------------------------
 def call_minimax_stt(audio_file):
-    """Compatibilidad de nombre: usa Google Speech-to-Text REST con API key.
-
-    - Recibe el archivo de audio (WAV/MP3/M4A) desde Flask.
-    - Llama a la API REST de Google Speech-to-Text con SPEECH_API_KEY.
-    - Devuelve el texto transcrito o None en caso de error.
+    """Transcribe audio usando Google Speech-to-Text REST API.
+    
+    Corregido para soportar múltiples formatos de audio desde React Native.
     """
-
+    
     if not SPEECH_API_KEY:
         print("⚠️ Falta SPEECH_API_KEY en variables de entorno")
         return None
 
     try:
+        # Leer contenido del archivo
         audio_bytes = audio_file.read()
         audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
+        
+        # Obtener el nombre del archivo para detectar formato
+        filename = audio_file.filename.lower() if audio_file.filename else ""
+        
+        # Determinar encoding basado en extensión
+        encoding = "LINEAR16"  # Default para WAV
+        sample_rate = 44100    # Default común
+        
+        if filename.endswith('.mp3'):
+            encoding = "MP3"
+        elif filename.endswith('.m4a') or filename.endswith('.aac'):
+            encoding = "AMR_WB"  # O usar MP3 como fallback
+        elif filename.endswith('.wav'):
+            encoding = "LINEAR16"
+        elif filename.endswith('.webm'):
+            encoding = "WEBM_OPUS"
+        else:
+            # Intentar detectar por los primeros bytes (magic numbers)
+            if audio_bytes.startswith(b'RIFF'):
+                encoding = "LINEAR16"  # WAV
+            elif audio_bytes.startswith(b'\xff\xfb') or audio_bytes.startswith(b'ID3'):
+                encoding = "MP3"
+            else:
+                # Fallback: intentar LINEAR16
+                encoding = "LINEAR16"
+        
+        print(f"🎤 Procesando audio: {filename or 'sin-nombre'}")
+        print(f"📊 Encoding detectado: {encoding}")
+        print(f"📏 Tamaño: {len(audio_bytes)} bytes")
 
         url = f"https://speech.googleapis.com/v1/speech:recognize?key={SPEECH_API_KEY}"
 
         payload = {
             "config": {
+                "encoding": encoding,
+                "sampleRateHertz": sample_rate,
                 "languageCode": "es-PE",
-                # No especificamos encoding para que Google lo detecte automáticamente.
                 "enableAutomaticPunctuation": True,
+                "model": "default",  # o "command_and_search" para mejor reconocimiento
             },
             "audio": {
                 "content": audio_base64,
             },
         }
 
-        resp = requests.post(url, json=payload)
+        resp = requests.post(url, json=payload, timeout=30)
+        
         if resp.status_code != 200:
-            print("Error STT HTTP", resp.status_code, resp.text[:500])
-            return None
+            print(f"❌ Error STT HTTP {resp.status_code}")
+            print(f"📄 Response: {resp.text[:500]}")
+            
+            # Si falla, intentar sin especificar sample rate
+            if "sampleRateHertz" in payload["config"]:
+                print("🔄 Reintentando sin sampleRateHertz...")
+                del payload["config"]["sampleRateHertz"]
+                resp = requests.post(url, json=payload, timeout=30)
+                
+                if resp.status_code != 200:
+                    print(f"❌ Error en reintento: {resp.status_code} - {resp.text[:300]}")
+                    return None
 
         data = resp.json()
         results = data.get("results", [])
+        
         if not results:
+            print("⚠️ Sin resultados de transcripción (audio vacío o inaudible)")
             return ""
 
-        return results[0].get("alternatives", [{}])[0].get("transcript", "")
+        transcript = results[0].get("alternatives", [{}])[0].get("transcript", "")
+        confidence = results[0].get("alternatives", [{}])[0].get("confidence", 0)
+        
+        print(f"✅ Transcrito: '{transcript}' (confianza: {confidence:.2f})")
+        return transcript
+        
+    except requests.exceptions.Timeout:
+        print("⏱️ Timeout en Google STT - el audio puede ser muy largo")
+        return None
     except Exception as e:
-        print("Error en Google STT (REST):", e)
+        print(f"❌ Error en Google STT: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
