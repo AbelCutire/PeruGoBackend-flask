@@ -123,10 +123,10 @@ def call_minimax_stt(audio_file):
         client = speech.SpeechClient(credentials=creds)
 
         audio = speech.RecognitionAudio(content=audio_bytes)
+        # No especificamos encoding para que Google lo detecte automáticamente.
         config = speech.RecognitionConfig(
             language_code="es-PE",
             enable_automatic_punctuation=True,
-            encoding=speech.RecognitionConfig.AudioEncoding.ENCODING_UNSPECIFIED,
         )
 
         response = client.recognize(config=config, audio=audio)
