@@ -9,24 +9,6 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-key-2024';
 
-// Middleware para verificar JWT
-function authenticateToken(req, res, next) {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-
-  if (!token) {
-    return res.status(401).json({ error: 'Token no proporcionado' });
-  }
-
-  jwt.verify(token, JWT_SECRET, (err, payload) => {
-    if (err) {
-      return res.status(403).json({ error: 'Token inválido' });
-    }
-    req.user = payload;
-    next();
-  });
-}
-
 // Middleware
 app.use(cors({
   origin: '*', // Permite todos los orígenes temporalmente
@@ -105,34 +87,6 @@ app.post('/auth/login', async (req, res) => {
   } catch (error) {
     console.error('❌ Error en login:', error);
     res.status(500).json({ error: 'Error interno del servidor' });
-  }
-});
-
-// ✅ RUTA PARA ACTUALIZAR PERFIL (USERNAME)
-app.patch('/auth/profile', authenticateToken, async (req, res) => {
-  try {
-    const { username } = req.body;
-
-    if (!username || !username.trim()) {
-      return res.status(400).json({ error: 'El nombre de usuario es requerido' });
-    }
-
-    const updatedUser = await prisma.user.update({
-      where: { id: req.user.userId },
-      data: { username: username.trim() },
-    });
-
-    return res.json({
-      message: 'Perfil actualizado correctamente',
-      user: {
-        id: updatedUser.id,
-        email: updatedUser.email,
-        username: updatedUser.username,
-      },
-    });
-  } catch (error) {
-    console.error('❌ Error al actualizar perfil:', error);
-    return res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
@@ -254,4 +208,3 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('   POST /auth/register');
   console.log('   POST /auth/recover');
 });
-
