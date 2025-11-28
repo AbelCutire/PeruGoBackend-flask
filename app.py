@@ -123,6 +123,23 @@ def call_groq_llm(user_text):
         return "Error con LLM"
 
 
+@app.route("/process", methods=["POST"])
+def process_text():
+    data = request.get_json(silent=True) or {}
+    user_text = (data.get("text") or "").strip()
+
+    if not user_text:
+        return jsonify({"text_response": "Texto vacío"}), 400
+
+    llm_text = call_groq_llm(user_text)
+
+    return jsonify({
+        "text_response": {
+            "reply": llm_text
+        }
+    })
+
+
 @app.route("/sts", methods=["POST"])
 def sts():
     data = request.get_json()
