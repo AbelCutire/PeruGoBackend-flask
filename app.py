@@ -142,12 +142,23 @@ def process_text():
 
 @app.route("/sts", methods=["POST"])
 def sts():
-    data = request.get_json()
+    # Intentar leer JSON de forma silenciosa (para evitar 415 si no es application/json)
+    data = request.get_json(silent=True)
 
-    if not data or "audio_base64" not in data:
-        return jsonify({"error": "audio_base64 requerido"}), 400
+    audio_bytes = None
 
-    audio_bytes = base64.b64decode(data["audio_base64"])
+    # Caso 1: JSON con audio_base64
+    if data and "audio_base64" in data:
+        audio_bytes = base64.b64decode(data["audio_base64"])
+
+    # Caso 2: multipart/form-data con archivo 'audio'
+    elif "audio" in request.files:
+        audio_file = request.files["audio"]
+        audio_bytes = audio_file.read()
+
+    if audio_bytes is None:
+        return jsonify({"error": "audio o audio_base64 requerido"}), 400
+
     stt_text = google_stt_raw_bytes(audio_bytes)
 
     if stt_text is None:
