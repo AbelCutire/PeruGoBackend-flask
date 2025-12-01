@@ -29,20 +29,17 @@ def home():
 # =========================================================
 def google_stt_raw_bytes(audio_bytes: bytes):
     header = audio_bytes[:12]
-    
-    # Detección de encoding basada en cabeceras de archivo (Magic Bytes)
+
+    # Detección de formato mejorada
     if header.startswith(b'RIFF') and b'WAVE' in header:
-        # Formato WAV (Viene de iOS)
-        encoding = "LINEAR16"
+        encoding = "LINEAR16"  # Para audio desde iOS (.wav)
     elif header.startswith(b'#!AMR-WB'):
-        # Formato AMR Wideband (Viene de Android)
-        encoding = "AMR_WB"
+        encoding = "AMR_WB"    # Para audio desde Android (.amr)
     elif header.startswith(b'\x1A\x45\xDF\xA3'):
-        # Formato WebM (Viene de Web)
-        encoding = "WEBM_OPUS"
+        encoding = "WEBM_OPUS" # Para web
     else:
-        # Fallback (Aunque es probable que falle si no es uno de los anteriores)
-        print("⚠️ Formato no reconocido, intentando MP3 por defecto.")
+        # Fallback para otros casos (aunque debería entrar en los anteriores)
+        print("⚠️ Formato no reconocido, intentando MP3.")
         encoding = "MP3"
 
     print("📊 Encoding detectado:", encoding)
@@ -53,7 +50,7 @@ def google_stt_raw_bytes(audio_bytes: bytes):
     payload = {
         "config": {
             "encoding": encoding,
-            "sampleRateHertz": 16000, # Importante forzar el sampleRate
+            "sampleRateHertz": 16000, # Es crucial especificar la frecuencia
             "languageCode": "es-PE",
             "enableAutomaticPunctuation": True,
         },
@@ -63,7 +60,6 @@ def google_stt_raw_bytes(audio_bytes: bytes):
     }
 
     url = f"https://speech.googleapis.com/v1/speech:recognize?key={SPEECH_API_KEY}"
-
 # =========================================================
 # RUTA STT BASE64
 # =========================================================
