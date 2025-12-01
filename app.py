@@ -29,16 +29,20 @@ def home():
 # =========================================================
 def google_stt_raw_bytes(audio_bytes: bytes):
     header = audio_bytes[:12]
-
+    
+    # Detección de encoding basada en cabeceras de archivo (Magic Bytes)
     if header.startswith(b'RIFF') and b'WAVE' in header:
+        # Formato WAV (Viene de iOS)
         encoding = "LINEAR16"
-    elif header[4:8] == b'ftyp':
-        encoding = "MP3"
-    elif header.startswith(b'\xff\xfb') or header.startswith(b'ID3'):
-        encoding = "MP3"
+    elif header.startswith(b'#!AMR-WB'):
+        # Formato AMR Wideband (Viene de Android)
+        encoding = "AMR_WB"
     elif header.startswith(b'\x1A\x45\xDF\xA3'):
+        # Formato WebM (Viene de Web)
         encoding = "WEBM_OPUS"
     else:
+        # Fallback (Aunque es probable que falle si no es uno de los anteriores)
+        print("⚠️ Formato no reconocido, intentando MP3 por defecto.")
         encoding = "MP3"
 
     print("📊 Encoding detectado:", encoding)
@@ -49,6 +53,7 @@ def google_stt_raw_bytes(audio_bytes: bytes):
     payload = {
         "config": {
             "encoding": encoding,
+            "sampleRateHertz": 16000, # Importante forzar el sampleRate
             "languageCode": "es-PE",
             "enableAutomaticPunctuation": True,
         },
@@ -58,24 +63,6 @@ def google_stt_raw_bytes(audio_bytes: bytes):
     }
 
     url = f"https://speech.googleapis.com/v1/speech:recognize?key={SPEECH_API_KEY}"
-
-    resp = requests.post(url, json=payload, timeout=30)
-
-    if resp.status_code != 200:
-        print("❌ Error STT:", resp.text[:500])
-        return None
-
-    data = resp.json()
-    results = data.get("results", [])
-
-    if not results:
-        print("⚠️ STT vacío")
-        return ""
-
-    transcript = results[0]["alternatives"][0]["transcript"]
-    print("✅ Texto:", transcript)
-    return transcript
-
 
 # =========================================================
 # RUTA STT BASE64
