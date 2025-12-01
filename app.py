@@ -27,30 +27,32 @@ def home():
 # =========================================================
 # FUNCIÓN STT POR BYTES BASE64 (SEGURA Y ROBUSTA)
 # =========================================================
+# EN app.py
+
 def google_stt_raw_bytes(audio_bytes: bytes):
     header = audio_bytes[:12]
-
-    # Detección de formato mejorada
+    
+    # 1. Detección de formato (Backend)
     if header.startswith(b'RIFF') and b'WAVE' in header:
-        encoding = "LINEAR16"  # Para audio desde iOS (.wav)
+        encoding = "LINEAR16"  # iOS
     elif header.startswith(b'#!AMR-WB'):
-        encoding = "AMR_WB"    # Para audio desde Android (.amr)
+        encoding = "AMR_WB"    # Android
     elif header.startswith(b'\x1A\x45\xDF\xA3'):
-        encoding = "WEBM_OPUS" # Para web
+        encoding = "WEBM_OPUS" # Web
     else:
-        # Fallback para otros casos (aunque debería entrar en los anteriores)
-        print("⚠️ Formato no reconocido, intentando MP3.")
+        # Si llega .m4a entra aquí y falla porque Google no acepta MP3 para ese formato
+        print(f"⚠️ Formato no reconocido (Header: {header.hex()}). Intentando MP3.")
         encoding = "MP3"
 
-    print("📊 Encoding detectado:", encoding)
-    print("📏 Tamaño recibido:", len(audio_bytes))
+    print(f"📊 Encoding seleccionado: {encoding}")
+    print(f"kb Recibidos: {len(audio_bytes)/1024:.2f} KB")
 
     audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
 
     payload = {
         "config": {
             "encoding": encoding,
-            "sampleRateHertz": 16000, # Es crucial especificar la frecuencia
+            "sampleRateHertz": 16000,
             "languageCode": "es-PE",
             "enableAutomaticPunctuation": True,
         },
@@ -60,6 +62,28 @@ def google_stt_raw_bytes(audio_bytes: bytes):
     }
 
     url = f"https://speech.googleapis.com/v1/speech:recognize?key={SPEECH_API_KEY}"
+
+    # 2. Llamada a la API (ESTO FALTABA EN TU CÓDIGO)
+    try:
+        response = requests.post(url, json=payload, timeout=30)
+        
+        if response.status_code != 200:
+            print(f"❌ Error Google STT ({response.status_code}): {response.text}")
+            return None
+            
+        result_json = response.json()
+        
+        # Validar si hay transcripción
+        if "results" not in result_json:
+            print("⚠️ Google no devolvió resultados (audio vacío o ininteligible)")
+            return "" # Devolver cadena vacía para indicar "silencio"
+            
+        transcript = result_json["results"][0]["alternatives"][0]["transcript"]
+        return transcript
+
+    except Exception as e:
+        print(f"❌ Excepción en request: {str(e)}")
+        return None
 # =========================================================
 # RUTA STT BASE64
 # =========================================================
